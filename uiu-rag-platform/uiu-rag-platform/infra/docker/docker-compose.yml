@@ -1,0 +1,105 @@
+version: "3.9"
+
+# UIU Academic RAG Platform — Docker Compose
+# Runs: PostgreSQL+pgvector, Redis, Backend API, Frontend
+
+services:
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: uiu_rag_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-uiu_rag}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-uiu_rag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.4-alpine
+    container_name: uiu_rag_redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Backend API ────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: uiu_rag_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-uiu_rag}
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_SERVICE_ACCOUNT_JSON: /app/secrets/google_service_account.json
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID}
+      EMBEDDING_MODEL_NAME: BAAI/bge-small-en-v1.5
+      RERANKER_MODEL_NAME: BAAI/bge-reranker-base
+      EMBEDDING_DEVICE: cpu
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      ALLOWED_ORIGINS: '["http://localhost:5173","http://localhost:3000"]'
+    volumes:
+      - ./secrets:/app/secrets:ro
+      - model_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: uiu_rag_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+
+volumes:
+  postgres_data:
+  redis_data:
+  model_cache:
+
+networks:
+  default:
+    name: uiu_rag_network

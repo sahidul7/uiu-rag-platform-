@@ -1,0 +1,55 @@
+version: "3.9"
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s; timeout: 5s; retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    restart: always
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build: { context: ../../backend, dockerfile: Dockerfile }
+    restart: always
+    depends_on: [postgres, redis]
+    environment:
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-llama-3.1-8b-instant}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      RESTRICT_TO_UIU_EMAIL: ${RESTRICT_TO_UIU_EMAIL:-true}
+      UIU_EMAIL_DOMAIN: ${UIU_EMAIL_DOMAIN:-uiu.ac.bd}
+      LOG_FORMAT: json
+    volumes:
+      - ../../secrets:/app/secrets:ro
+      - model_cache:/root/.cache/huggingface
+
+  frontend:
+    build: { context: ../../frontend, dockerfile: Dockerfile }
+    restart: always
+    depends_on: [backend]
+    ports: ["80:80"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  model_cache:
